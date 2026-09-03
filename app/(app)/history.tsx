@@ -1,0 +1,22 @@
+import { useCallback, useState } from 'react';
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect, router } from 'expo-router';
+import { Card, SectionTitle } from '@/components/ui';
+import { supabase } from '@/lib/supabase';
+
+export default function History() {
+  const [checks, setChecks] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const load = useCallback(async () => { const { data, error } = await supabase.from('scanner_checks').select('id,result,created_at,scan_region,scanner_strength_t').order('created_at', { ascending: false }).limit(100); if (!error) setChecks(data ?? []); setLoading(false); }, []);
+  useFocusEffect(useCallback(() => { load(); }, [load]));
+  async function refresh() { setRefreshing(true); await load(); setRefreshing(false); }
+  if (loading) return <View style={styles.center}><ActivityIndicator /></View>;
+  return <ScrollView contentInsetAdjustmentBehavior="automatic" refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />} contentContainerStyle={styles.content}>
+    <View style={styles.header}><Pressable onPress={() => router.push('/(app)/dashboard')}><Text style={styles.back}>‹ Dashboard</Text></Pressable><Text style={styles.title}>History</Text><View style={{width:80}}/></View>
+    <Card><SectionTitle title="QuickCheck history" subtitle={`${checks.length} check${checks.length === 1 ? '' : 's'} recorded on this account.`}/>{checks.length === 0 ? <View style={styles.empty}><Text style={styles.emptyTitle}>No checks yet</Text><Text style={styles.emptyBody}>Complete a QuickCheck and the saved result will appear here.</Text><Pressable onPress={() => router.push('/(app)/quickcheck')} style={styles.start}><Text style={styles.startText}>START QUICKCHECK</Text></Pressable></View> : checks.map((check) => <HistoryRow key={check.id} check={check} />)}</Card>
+    <Card><SectionTitle title="Important"/><Text style={styles.note}>History records the result returned by the compatibility engine at the time of the check. It does not replace current manufacturer labeling or required clinical review.</Text></Card>
+  </ScrollView>;
+}
+function HistoryRow({ check }: { check: any }) { const r=check.result ?? {}; const status=String(r.display_status ?? r.status ?? 'UNKNOWN').toUpperCase(); const device=r.device?.model ?? r.device?.model_name ?? 'Implant not identified'; const scanner=r.scanner?.model ?? r.scanner?.model_name ?? 'Scanner'; return <View style={styles.item}><View style={styles.status}><Text style={styles.statusText}>{status === 'UNSAFE' ? 'NOT SAFE' : status}</Text></View><View style={styles.copy}><Text style={styles.device}>{String(device)}</Text><Text style={styles.meta}>{String(scanner)} • {check.scanner_strength_t ?? '?'}T • {check.scan_region ?? 'Region'}</Text><Text style={styles.date}>{new Date(check.created_at).toLocaleString()}</Text></View></View>; }
+const styles=StyleSheet.create({content:{flexGrow:1,padding:20,paddingBottom:40,gap:14,backgroundColor:'#f7f9fc'},center:{flex:1,alignItems:'center',justifyContent:'center'},header:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingTop:8,paddingBottom:4},back:{fontSize:15,fontWeight:'800',color:'#175cd3'},title:{fontSize:25,fontWeight:'900',color:'#101828'},empty:{paddingVertical:15,gap:7},emptyTitle:{fontSize:17,fontWeight:'900',color:'#101828'},emptyBody:{fontSize:13,lineHeight:19,color:'#667085'},start:{marginTop:8,minHeight:48,borderRadius:12,backgroundColor:'#111827',alignItems:'center',justifyContent:'center'},startText:{fontSize:12,fontWeight:'900',color:'#fff'},item:{flexDirection:'row',gap:12,paddingVertical:12,borderTopWidth:1,borderTopColor:'#eef0f4'},status:{minWidth:82,height:34,borderRadius:9,backgroundColor:'#f2f4f7',alignItems:'center',justifyContent:'center',paddingHorizontal:7},statusText:{fontSize:9,fontWeight:'900',color:'#344054'},copy:{flex:1,gap:2},device:{fontSize:14,fontWeight:'800',color:'#101828'},meta:{fontSize:11,color:'#667085'},date:{fontSize:10,color:'#98a2b3'},note:{fontSize:13,lineHeight:20,color:'#475467'}});

@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { Card, Choice, PrimaryButton, SearchInput, SectionTitle } from '@/components/ui';
 import { getScannerOptions, runQuickCheck, searchComponents, searchDevices, searchScanners, type QuickCheckItem, type QuickCheckResult } from '@/lib/quickcheck';
-import { supabase } from '@/lib/supabase';
 
 const regions = ['Full body', 'Head', 'Spine', 'Chest', 'Abdomen', 'Pelvis', 'Extremity'];
 const strengths = [1.5, 3];
@@ -62,7 +61,7 @@ export default function QuickCheck() {
     finally { setLoading(false); }
   }
 
-  function reset() { setStep(1); setDevice(null); setComponent(null); setScanner(null); setStrength(null); setResult(null); setError(''); setDeviceSearch(''); setComponentSearch(''); }
+  function reset() { setStep(1); setDevice(null); setComponent(null); setScanner(null); setStrength(null); setResult(null); setError(''); setDeviceSearch(''); setComponentSearch(''); setScanners([]); }
 
   if (result) return <ResultScreen result={result} onAgain={reset} />;
 
@@ -82,18 +81,82 @@ export default function QuickCheck() {
 
 function ResultScreen({ result, onAgain }: { result: QuickCheckResult; onAgain: () => void }) {
   const status = result.status;
-  const title = result.display_status || (status === 'unsafe' ? 'NOT SAFE' : status.toUpperCase());
-  const tone = status === 'safe' ? '#166534' : status === 'conditional' ? '#92400e' : '#991b1b';
+  const meta = statusMeta(status);
+  const conditions = extractConditions(result.condition);
+  const source = getSource(result);
+  const scannerStrength = Number(result.scanner?.field_strength_t ?? result.scanner?.field_strength ?? NaN);
+  const allowed = Array.isArray(result.condition?.allowed_field_strengths_t) ? result.condition.allowed_field_strengths_t.map(Number) : [];
+  const strengthMismatch = Number.isFinite(scannerStrength) && allowed.length > 0 && !allowed.includes(scannerStrength);
+
   return <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content}>
     <View style={styles.header}><View><Text style={styles.eyebrow}>MRI SAFETY RESULT</Text><Text style={styles.title}>QuickCheck</Text></View><Pressable onPress={onAgain} style={styles.newButton}><Text style={styles.newButtonText}>NEW</Text></Pressable></View>
-    <View style={[styles.resultHero, { borderColor: tone }]}><Text style={[styles.resultStatus, { color: tone }]}>{title}</Text><Text style={styles.resultDecision}>{result.decision || (result.safe_to_scan ? 'The selected configuration meets the evaluated criteria.' : 'Do not proceed without resolving the listed requirements.')}</Text></View>
-    <Card><SectionTitle title="Checked configuration"/><Info label="Implant" value={displayObject(result.device)}/>{result.component ? <Info label="Lead / component" value={displayObject(result.component)}/> : null}<Info label="Scanner" value={displayObject(result.scanner)}/>{result.scanner?.field_strength_t ? <Info label="Field strength" value={`${result.scanner.field_strength_t}T`}/> : null}<Info label="Scan region" value={String(result.scanner?.scan_region ?? result.condition?.scan_region ?? 'Selected region')}/></Card>
-    <Card><SectionTitle title="What to do next"/><Text style={styles.nextAction}>{result.next_action || (result.requires_review ? 'Review the manufacturer labeling and all listed conditions before scanning.' : 'Follow the applicable manufacturer MRI conditions.')}</Text></Card>
-    <Card><SectionTitle title="Safety gate"/><Text style={styles.footerText}>Safe-to-scan: {result.safe_to_scan ? 'YES' : 'NO'}{result.requires_review ? ' • REVIEW REQUIRED' : ''}</Text></Card>
+
+    <View style={[styles.resultHero, { borderColor: meta.border }]}>
+      <View style={[styles.statusPill, { backgroundColor: meta.background }]}><Text style={[styles.statusPillText, { color: meta.text }]}>{meta.label}</Text></View>
+      <Text style={styles.resultHeadline}>{meta.headline}</Text>
+      <Text style={styles.resultDecision}>{result.decision || meta.defaultDecision}</Text>
+      {strengthMismatch ? <View style={styles.mismatch}><Text style={styles.mismatchTitle}>SCANNER FIELD-STRENGTH MISMATCH</Text><Text style={styles.mismatchText}>The selected {scannerStrength}T scanner is outside the labeled field strength range: {allowed.join('T, ')}T.</Text></View> : null}
+    </View>
+
+    <Card><SectionTitle title="Checked configuration"/><Info label="Implant" value={displayObject(result.device)}/>{result.component ? <Info label="Lead / component" value={displayObject(result.component)}/> : null}<Info label="Scanner" value={displayObject(result.scanner)}/><Info label="Field strength" value={Number.isFinite(scannerStrength) ? `${scannerStrength}T` : 'Not verified'}/><Info label="Scan region" value={String(result.condition?.scan_region ?? 'Selected region')}/></Card>
+
+    <Card><SectionTitle title="Why this result"/><Text style={styles.bodyText}>{result.next_action || meta.nextAction}</Text></Card>
+
+    <Card><SectionTitle title="Conditions that must be met" subtitle={conditions.length ? 'Every applicable manufacturer condition must be satisfied before scanning.' : 'No verified condition set was returned.'}/>{conditions.length ? conditions.map((item, index) => <ConditionRow key={`${index}-${item}`} index={index + 1} text={item}/>) : <View style={styles.warningBox}><Text style={styles.warningTitle}>REVIEW REQUIRED</Text><Text style={styles.bodyText}>Do not treat this result as clearance without verified manufacturer conditions.</Text></View>}</Card>
+
+    {source ? <Card><SectionTitle title="Manufacturer source" subtitle="Source verification supports the database record; it does not replace the manufacturer's current labeling."/><Info label="Source" value={source.title}/><Info label="Verification" value={String(source.verified ?? 'Manufacturer labeling')}/>{source.url ? <Pressable onPress={() => Linking.openURL(source.url).catch(() => Alert.alert('Unable to open source'))} style={styles.sourceButton}><Text style={styles.sourceButtonText}>OPEN MANUFACTURER SOURCE</Text></Pressable> : null}</Card> : null}
+
+    <View style={styles.gate}><Text style={styles.gateLabel}>SAFETY GATE</Text><Text style={[styles.gateValue, { color: meta.text }]}>{result.safe_to_scan ? 'SAFE TO SCAN' : 'NOT CLEARED TO SCAN'}</Text><Text style={styles.gateNote}>{result.requires_review ? 'REVIEW REQUIRED before proceeding.' : 'Use the current manufacturer labeling and facility protocol.'}</Text></View>
     <PrimaryButton label="START NEW CHECK" onPress={onAgain}/>
   </ScrollView>;
 }
+
+function statusMeta(status: QuickCheckResult['status']) {
+  if (status === 'safe') return { label: 'SAFE', headline: 'Meets the evaluated criteria', text: '#166534', border: '#86efac', background: '#dcfce7', defaultDecision: 'The selected configuration meets the evaluated criteria.', nextAction: 'Proceed only within the verified manufacturer labeling and your facility MRI safety workflow.' };
+  if (status === 'conditional') return { label: 'CONDITIONAL', headline: 'NOT CLEARED — conditions apply', text: '#92400e', border: '#f59e0b', background: '#fef3c7', defaultDecision: 'MRI may be possible only when every applicable manufacturer condition is satisfied.', nextAction: 'Review and satisfy every listed manufacturer condition before scanning. This result is not a clearance by itself.' };
+  if (status === 'unsafe') return { label: 'NOT SAFE', headline: 'Do not proceed with this configuration', text: '#991b1b', border: '#fca5a5', background: '#fee2e2', defaultDecision: 'The selected configuration is not supported by the evaluated safety labeling.', nextAction: 'Do not scan. Resolve the incompatibility using current manufacturer labeling and MRI safety procedures.' };
+  return { label: 'UNKNOWN', headline: 'DO NOT SCAN — review required', text: '#7f1d1d', border: '#fca5a5', background: '#fee2e2', defaultDecision: 'MRI safety could not be verified for the selected configuration.', nextAction: 'Do not scan. Positively identify the exact device, components, scanner, and applicable manufacturer labeling.' };
+}
+
+function extractConditions(condition?: Record<string, unknown> | null) {
+  if (!condition) return [];
+  const ignored = new Set(['id', 'device_id', 'component_id', 'scanner_model_id', 'active', 'created_at', 'updated_at', 'source_id', 'source_document_id', 'compatibility_status', 'allowed_field_strengths_t']);
+  const labels: Record<string, string> = {
+    field_strength: 'Field strength', scan_region: 'Scan region', allowed_scan_regions: 'Allowed scan regions', magnet_type: 'Magnet type', bore_type: 'Bore type', scan_mode: 'Scan mode', coil_requirements: 'Coil requirements', sar_limit: 'SAR limit', b1_rms_limit: 'B1+rms limit', gradient_limit: 'Gradient limit', spatial_gradient_limit: 'Spatial gradient limit', other_conditions: 'Manufacturer conditions', patient_position: 'Patient position', device_position: 'Device position', system_requirements: 'System requirements'
+  };
+  const output: string[] = [];
+  for (const [key, raw] of Object.entries(condition)) {
+    if (ignored.has(key) || raw === null || raw === undefined || raw === '') continue;
+    if (Array.isArray(raw)) {
+      if (!raw.length) continue;
+      output.push(`${labels[key] ?? prettify(key)}: ${raw.map(String).join(', ')}`);
+    } else if (typeof raw === 'object') {
+      const text = Object.entries(raw as Record<string, unknown>).map(([k, v]) => `${prettify(k)}: ${Array.isArray(v) ? v.join(', ') : String(v)}`).join('; ');
+      if (text) output.push(`${labels[key] ?? prettify(key)}: ${text}`);
+    } else if (typeof raw === 'boolean') {
+      output.push(`${labels[key] ?? prettify(key)}: ${raw ? 'Yes' : 'No'}`);
+    } else {
+      output.push(`${labels[key] ?? prettify(key)}: ${String(raw)}`);
+    }
+  }
+  return output;
+}
+
+function getSource(result: QuickCheckResult) {
+  const candidates = [result.condition, result.device, result as Record<string, unknown>];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const url = candidate.source_url ?? candidate.url ?? candidate.source_uri;
+    const title = candidate.source_title ?? candidate.document_title ?? candidate.source_name ?? candidate.source;
+    const verified = candidate.verified_by ?? candidate.verification_status;
+    if (url || title || verified) return { url: typeof url === 'string' ? url : undefined, title: String(title ?? 'Manufacturer labeling'), verified: verified ? String(verified) : undefined };
+  }
+  return null;
+}
+
+function prettify(value: string) { return value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase()); }
 function displayObject(value?: Record<string, unknown> | null) { if (!value) return 'Not identified'; const name = value.model_name ?? value.name ?? value.model ?? 'Selected'; const number = value.model_number ?? value.model; return number && number !== name ? `${name} • ${number}` : String(name); }
 function Info({ label, value }: { label: string; value: string }) { return <View style={styles.info}><Text style={styles.infoLabel}>{label}</Text><Text selectable style={styles.infoValue}>{value}</Text></View>; }
+function ConditionRow({ index, text }: { index: number; text: string }) { return <View style={styles.conditionRow}><View style={styles.conditionNumber}><Text style={styles.conditionNumberText}>{index}</Text></View><Text style={styles.conditionText}>{text}</Text></View>; }
 
-const styles=StyleSheet.create({content:{flexGrow:1,padding:20,paddingBottom:40,gap:14,backgroundColor:'#f7f9fc'},header:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingTop:8},eyebrow:{fontSize:11,fontWeight:'900',letterSpacing:2,color:'#667085'},title:{fontSize:32,fontWeight:'900',color:'#101828',marginTop:3},settings:{width:42,height:42,borderRadius:12,backgroundColor:'#fff',borderWidth:1,borderColor:'#e4e7ec',alignItems:'center',justifyContent:'center'},settingsText:{fontSize:19},newButton:{paddingHorizontal:15,paddingVertical:10,borderRadius:10,backgroundColor:'#111827'},newButtonText:{color:'#fff',fontSize:12,fontWeight:'900'},progress:{height:5,backgroundColor:'#e4e7ec',borderRadius:5,overflow:'hidden',marginTop:4},progressFill:{height:5,backgroundColor:'#175cd3'},step:{fontSize:11,fontWeight:'900',letterSpacing:1.2,color:'#667085'},selectedLabel:{fontWeight:'800',fontSize:14,color:'#175cd3',paddingVertical:3},subheading:{fontSize:11,fontWeight:'900',letterSpacing:1,color:'#667085',marginTop:5},row:{flexDirection:'row',gap:10},strength:{flex:1,height:64,borderRadius:14,borderWidth:1,borderColor:'#d9dee7',alignItems:'center',justifyContent:'center',backgroundColor:'#fff'},strengthSelected:{borderColor:'#175cd3',backgroundColor:'#eff6ff'},strengthValue:{fontSize:20,fontWeight:'900',color:'#344054'},strengthTextSelected:{color:'#175cd3'},error:{color:'#b42318',fontSize:13,lineHeight:19},footer:{padding:4},footerText:{fontSize:12,lineHeight:18,color:'#667085'},resultHero:{backgroundColor:'#fff',borderWidth:2,borderRadius:20,padding:22,gap:10},resultStatus:{fontSize:30,fontWeight:'900',letterSpacing:.5},resultDecision:{fontSize:16,lineHeight:24,color:'#344054'},nextAction:{fontSize:15,lineHeight:23,color:'#344054'},info:{paddingVertical:4,gap:2},infoLabel:{fontSize:11,fontWeight:'800',color:'#667085',textTransform:'uppercase',letterSpacing:.5},infoValue:{fontSize:15,fontWeight:'700',color:'#101828'}});
+const styles=StyleSheet.create({content:{flexGrow:1,padding:20,paddingBottom:40,gap:14,backgroundColor:'#f7f9fc'},header:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingTop:8},eyebrow:{fontSize:11,fontWeight:'900',letterSpacing:2,color:'#667085'},title:{fontSize:32,fontWeight:'900',color:'#101828',marginTop:3},settings:{width:42,height:42,borderRadius:12,backgroundColor:'#fff',borderWidth:1,borderColor:'#e4e7ec',alignItems:'center',justifyContent:'center'},settingsText:{fontSize:19},newButton:{paddingHorizontal:15,paddingVertical:10,borderRadius:10,backgroundColor:'#111827'},newButtonText:{color:'#fff',fontSize:12,fontWeight:'900'},progress:{height:5,backgroundColor:'#e4e7ec',borderRadius:5,overflow:'hidden',marginTop:4},progressFill:{height:5,backgroundColor:'#175cd3'},step:{fontSize:11,fontWeight:'900',letterSpacing:1.2,color:'#667085'},selectedLabel:{fontWeight:'800',fontSize:14,color:'#175cd3',paddingVertical:3},subheading:{fontSize:11,fontWeight:'900',letterSpacing:1,color:'#667085',marginTop:5},row:{flexDirection:'row',gap:10},strength:{flex:1,height:64,borderRadius:14,borderWidth:1,borderColor:'#d9dee7',alignItems:'center',justifyContent:'center',backgroundColor:'#fff'},strengthSelected:{borderColor:'#175cd3',backgroundColor:'#eff6ff'},strengthValue:{fontSize:20,fontWeight:'900',color:'#344054'},strengthTextSelected:{color:'#175cd3'},error:{color:'#b42318',fontSize:13,lineHeight:19},footer:{padding:4},footerText:{fontSize:12,lineHeight:18,color:'#667085'},resultHero:{backgroundColor:'#fff',borderWidth:2,borderRadius:20,padding:20,gap:10},statusPill:{alignSelf:'flex-start',paddingHorizontal:12,paddingVertical:7,borderRadius:999},statusPillText:{fontSize:12,fontWeight:'900',letterSpacing:1},resultHeadline:{fontSize:24,fontWeight:'900',color:'#101828',lineHeight:30},resultDecision:{fontSize:15,lineHeight:23,color:'#344054'},mismatch:{marginTop:3,padding:13,borderRadius:12,backgroundColor:'#fff1f2',borderWidth:1,borderColor:'#fecdd3',gap:4},mismatchTitle:{fontSize:11,fontWeight:'900',letterSpacing:.8,color:'#9f1239'},mismatchText:{fontSize:13,lineHeight:19,color:'#881337'},bodyText:{fontSize:14,lineHeight:22,color:'#344054'},info:{paddingVertical:4,gap:2},infoLabel:{fontSize:11,fontWeight:'800',color:'#667085',textTransform:'uppercase',letterSpacing:.5},infoValue:{fontSize:15,fontWeight:'700',color:'#101828'},conditionRow:{flexDirection:'row',gap:11,alignItems:'flex-start',paddingVertical:4},conditionNumber:{width:26,height:26,borderRadius:13,backgroundColor:'#eef2f6',alignItems:'center',justifyContent:'center'},conditionNumberText:{fontSize:12,fontWeight:'900',color:'#475467'},conditionText:{flex:1,fontSize:14,lineHeight:21,color:'#344054',paddingTop:2},warningBox:{padding:13,borderRadius:12,backgroundColor:'#fff7ed',borderWidth:1,borderColor:'#fed7aa',gap:4},warningTitle:{fontSize:11,fontWeight:'900',letterSpacing:.8,color:'#9a3412'},sourceButton:{minHeight:48,borderRadius:12,borderWidth:1,borderColor:'#175cd3',alignItems:'center',justifyContent:'center',paddingHorizontal:14},sourceButtonText:{fontSize:12,fontWeight:'900',color:'#175cd3',letterSpacing:.4},gate:{padding:18,borderRadius:18,backgroundColor:'#fff',borderWidth:1,borderColor:'#e7ebf1',gap:5},gateLabel:{fontSize:10,fontWeight:'900',letterSpacing:1.3,color:'#667085'},gateValue:{fontSize:20,fontWeight:'900'},gateNote:{fontSize:12,lineHeight:18,color:'#667085'}});

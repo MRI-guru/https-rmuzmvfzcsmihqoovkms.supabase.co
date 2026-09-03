@@ -1,0 +1,26 @@
+{
+  "name": "mri-safety-quickcheck",
+  "version": "1.0.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.0",
+    "expo": "^55.0.0",
+    "expo-router": "^57.0.0",
+    "expo-sqlite": "^16.0.0",
+    "react": "19.1.0",
+    "react-native": "0.83.0",
+    "react-native-safe-area-context": "^5.6.0",
+    "react-native-screens": "^4.16.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.0",
+    "typescript": "~5.9.2"
+  }
+}

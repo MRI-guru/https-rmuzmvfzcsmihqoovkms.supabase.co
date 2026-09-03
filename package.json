@@ -12,6 +12,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",
     "expo": "^55.0.0",
+    "expo-document-picker": "~55.0.17",
     "expo-router": "^57.0.0",
     "expo-sqlite": "^16.0.0",
     "react": "19.1.0",

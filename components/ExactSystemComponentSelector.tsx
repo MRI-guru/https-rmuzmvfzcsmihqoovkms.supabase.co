@@ -22,8 +22,8 @@ function componentLabel(item: QuickCheckItem) {
 
 function slotTitle(slot: string) {
   if (slot === 'generator') return 'Generator / Device';
-  if (slot === 'lead_1') return 'Atrial Lead';
-  if (slot === 'lead_2') return 'Ventricular Lead';
+  if (slot === 'lead_1') return 'Lead Slot 1';
+  if (slot === 'lead_2') return 'Lead Slot 2';
   return `Lead ${slot.replace('lead_', '')}`;
 }
 
@@ -31,6 +31,8 @@ export default function ExactSystemComponentSelector({ device, components, searc
   const isDual = systemType === 'dual_chamber' || Number(requiredLeadCount) === 2;
   const isSingle = !isDual && Number(requiredLeadCount ?? 1) === 1;
   const slots = useMemo(() => isDual ? ['generator', 'lead_1', 'lead_2'] : isSingle ? ['generator', 'lead_1'] : ['generator'], [isDual, isSingle]);
+  const generators = useMemo(() => components.filter((item) => String(item.component_type ?? '').toLowerCase() === 'generator'), [components]);
+  const leads = useMemo(() => components.filter((item) => String(item.component_type ?? '').toLowerCase() === 'lead'), [components]);
 
   const selectedFor = (slot: string) => selections.find((selection) => selection.slot === slot)?.component_id ?? null;
   const selectedCount = selections.filter((selection) => selection.slot !== 'generator').length;
@@ -40,7 +42,7 @@ export default function ExactSystemComponentSelector({ device, components, searc
     <View style={styles.requirementBox}>
       <Text style={styles.requirementTitle}>{isDual ? 'DUAL-CHAMBER SYSTEM' : 'EXACT SYSTEM COMPONENTS'}</Text>
       <Text style={styles.requirementText}>
-        {isDual ? 'Select the generator, atrial lead, and ventricular lead. The same lead model may be selected in both lead slots when that is what is implanted.' : 'Select the generator and the exact implanted lead. Do not infer compatibility from a component model alone.'}
+        {isDual ? 'Select the generator, lead slot 1, and lead slot 2. The same lead model may be selected in both slots only when that exact slot-level configuration is verified.' : 'Select the generator and the exact implanted lead. Do not infer compatibility from a component model alone.'}
       </Text>
     </View>
 
@@ -53,10 +55,14 @@ export default function ExactSystemComponentSelector({ device, components, searc
           <Text style={styles.slotTitle}>{slotTitle(slot)}</Text>
           <Text style={styles.slotState}>{selectedId ? 'SELECTED' : 'REQUIRED'}</Text>
         </View>
-        {slot === 'generator' ? <Choice label={componentLabel(device)} selected={selectedId === device.id} onPress={() => onSelect(slot, device)} /> : components.slice(0, 12).map((item) => {
+        {slot === 'generator' ? (
+          generators.length > 0
+            ? generators.map((item) => <Choice key={item.id} label={componentLabel(item)} selected={selectedId === item.id} onPress={() => onSelect(slot, item)} />)
+            : <Text style={styles.missing}>No exact generator component is available for this device.</Text>
+        ) : leads.length > 0 ? leads.slice(0, 12).map((item) => {
           const selectedInAnotherSlot = selections.some((selection) => selection.slot !== slot && selection.component_id === item.id);
           return <Choice key={`${slot}-${item.id}`} label={`${componentLabel(item)}${selectedInAnotherSlot ? '  •  also selected' : ''}`} selected={selectedId === item.id} onPress={() => onSelect(slot, item)} />;
-        })}
+        }) : <Text style={styles.missing}>No exact lead components are available for this device.</Text>}
       </View>;
     })}
 
@@ -77,6 +83,7 @@ const styles = StyleSheet.create({
   slotHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 4 },
   slotTitle: { fontSize: 13, fontWeight: '900', color: '#101828' },
   slotState: { fontSize: 10, fontWeight: '900', letterSpacing: 1, color: '#667085' },
+  missing: { fontSize: 13, lineHeight: 19, color: '#b42318', paddingVertical: 8 },
   summary: { borderTopWidth: 1, borderTopColor: '#eaecf0', paddingTop: 12, gap: 4 },
   summaryTitle: { fontSize: 14, fontWeight: '900', color: '#101828' },
   summaryText: { fontSize: 12, lineHeight: 18, color: '#667085' },
